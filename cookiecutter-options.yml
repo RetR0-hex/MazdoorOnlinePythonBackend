@@ -1,0 +1,9 @@
+default_context:
+    project_name: "MazdoorOnlie_api"
+    app_name: "MazdoorOnline_API"
+    python_version: "3.7"
+    admin_user_username: "admin"
+    admin_user_email: "admin@mail.com"
+    admin_user_password: "admin"
+    use_celery: "yes"
+    wsgi_server: "gunicorn"

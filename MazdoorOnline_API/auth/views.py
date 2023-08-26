@@ -1,0 +1,379 @@
+from flask import request, jsonify, Blueprint, current_app as app
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
+)
+
+from MazdoorOnline_API.models import User
+from MazdoorOnline_API.extensions import pwd_context, jwt, apispec
+from MazdoorOnline_API.auth.helpers import (
+    revoke_token,
+    is_token_revoked,
+    add_token_to_database,
+    create_user,
+    create_labor_detail
+)
+
+blueprint = Blueprint("auth", __name__, url_prefix="/auth")
+
+
+@blueprint.route("/register-user", methods=["POST"])
+def register_user():
+
+    """Register new user and return access tokens
+
+    ---
+    post:
+      tags:
+        - auth
+      summary: Register a user
+      description: Registration of new user and returns access tokens
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                  example: Abdul-Mateen
+                  required: true
+                email:
+                  type: string
+                  example: example@test.com
+                  required: true
+                phone_number:
+                  type: string
+                  example: "03400000000"
+                  required: true
+                password:
+                  type: string
+                  example: P4$$w0rd!
+                  required: true
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: myaccesstoken
+                  refresh_token:
+                    type: string
+                    example: myrefreshtoken
+        400:
+          description: bad request
+      security: []
+    """
+
+    if not request.is_json:
+        return jsonify({"msg": "Missing JSON in request"}), 400
+
+    full_name = request.json.get("full_name", None)
+    email = request.json.get("email", None)
+    phone_number = request.json.get("phone_number", None)
+    password = request.json.get("password", None)
+
+    if not full_name or not email or not phone_number or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
+
+    # check if email, phone_number already exists in the database
+    # if it does raise error
+
+    if User.query.filter_by(email=email).first() is not None or User.query.filter_by(phone_number=phone_number).first():
+        return jsonify({"msg": "Account with these credentials already exists"}), 400
+
+    # to create the user
+    new_user = User(full_name=full_name, email=email, phone_number=phone_number, password=password, role=1, active=True)
+    create_user(new_user)
+    user = User.query.filter_by(email=email).first()
+
+    # now to create and send back access and refresh tokens
+    access_token = create_access_token(identity=user.id)
+    refresh_token = create_refresh_token(identity=user.id)
+    add_token_to_database(access_token, app.config["JWT_IDENTITY_CLAIM"])
+    add_token_to_database(refresh_token, app.config["JWT_IDENTITY_CLAIM"])
+
+    ret = {"access_token": access_token, "refresh_token": refresh_token}
+    return jsonify(ret), 200
+
+
+@blueprint.route("/register-labor", methods=["POST"])
+def register_labor():
+
+    """Register new labor and return access tokens
+
+    ---
+    post:
+      tags:
+        - auth
+      summary: Register a user
+      description: Registration of new user and returns access tokens
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                  example: Abdul-Mateen
+                  required: true
+                email:
+                  type: string
+                  example: example@test.com
+                  required: true
+                phone_number:
+                  type: string
+                  example: "00000000001"
+                  required: true
+                category_id:
+                  type: int
+                  example: "2"
+                  required: true
+                password:
+                  type: string
+                  example: P4$$w0rd!
+                  required: true
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: myaccesstoken
+                  refresh_token:
+                    type: string
+                    example: myrefreshtoken
+        400:
+          description: bad request
+      security: []
+    """
+
+    if not request.is_json:
+        return jsonify({"msg": "Missing JSON in request"}), 400
+
+    full_name = request.json.get("full_name", None)
+    email = request.json.get("email", None)
+    phone_number = request.json.get("phone_number", None)
+    category_id = request.json.get("category_id", None)
+    password = request.json.get("password", None)
+
+    # TODO add cateogies insert in the record later
+
+    if not full_name or not email or not phone_number or not category_id or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
+
+    # check if email, phone_number already exists in the database
+    # if it does raise error
+
+    if User.query.filter_by(email=email).first() is not None or User.query.filter_by(phone_number=phone_number).first():
+        return jsonify({"msg": "Account with these credentials already exists"}), 400
+
+    # to create the user
+    new_labor = User(full_name=full_name, email=email, phone_number=phone_number, password=password, active=True, role=2)
+    create_user(new_labor)
+    labor = User.query.filter_by(email=email).first()
+
+    # create the link between the category and labor
+    create_labor_detail(labor, int(category_id))
+
+    # now to create and send back access and refresh tokens
+    access_token = create_access_token(identity=labor.id)
+    refresh_token = create_refresh_token(identity=labor.id)
+    add_token_to_database(access_token, app.config["JWT_IDENTITY_CLAIM"])
+    add_token_to_database(refresh_token, app.config["JWT_IDENTITY_CLAIM"])
+
+    ret = {"access_token": access_token, "refresh_token": refresh_token}
+    return jsonify(ret), 200
+
+
+@blueprint.route("/login", methods=["POST"])
+def login():
+    """Authenticate user and return tokens
+
+    ---
+    post:
+      tags:
+        - auth
+      summary: Authenticate a user
+      description: Authenticates a user's credentials and returns tokens
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: example@test.com
+                  required: true
+                password:
+                  type: string
+                  example: P4$$w0rd!
+                  required: true
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: myaccesstoken
+                  refresh_token:
+                    type: string
+                    example: myrefreshtoken
+                  role:
+                    type: int
+                    example: 0
+        400:
+          description: bad request
+      security: []
+    """
+    if not request.is_json:
+        return jsonify({"msg": "Missing JSON in request"}), 400
+
+    email = request.json.get("email", None)
+    password = request.json.get("password", None)
+    if not email or not password:
+        return jsonify({"msg": "Missing username or password"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if user is None or not pwd_context.verify(password, user.password):
+        return jsonify({"msg": "Bad credentials"}), 400
+
+    access_token = create_access_token(identity=user.id)
+    refresh_token = create_refresh_token(identity=user.id)
+    add_token_to_database(access_token, app.config["JWT_IDENTITY_CLAIM"])
+    add_token_to_database(refresh_token, app.config["JWT_IDENTITY_CLAIM"])
+
+    ret = {"access_token": access_token, "refresh_token": refresh_token, "role": user.role}
+    return jsonify(ret), 200
+
+
+@blueprint.route("/refresh", methods=["GET"])
+@jwt_required(refresh=True)
+def refresh():
+    """Get an access token from a refresh token
+
+    ---
+    get:
+      tags:
+        - auth
+      summary: Get an access token
+      description: Get an access token by using a refresh token in the `Authorization` header
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: myaccesstoken
+        400:
+          description: bad request
+        401:
+          description: unauthorized
+    """
+    current_user = get_jwt_identity()
+    access_token = create_access_token(identity=current_user)
+    ret = {"access_token": access_token}
+    add_token_to_database(access_token, app.config["JWT_IDENTITY_CLAIM"])
+    return jsonify(ret), 200
+
+
+@blueprint.route("/revoke_access", methods=["DELETE"])
+@jwt_required()
+def revoke_access_token():
+    """Revoke an access token
+
+    ---
+    delete:
+      tags:
+        - auth
+      summary: Revoke an access token
+      description: Revoke an access token
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: token revoked
+        400:
+          description: bad request
+        401:
+          description: unauthorized
+    """
+    jti = get_jwt()["jti"]
+    user_identity = get_jwt_identity()
+    revoke_token(jti, user_identity)
+    return jsonify({"message": "token revoked"}), 200
+
+
+@blueprint.route("/revoke_refresh", methods=["DELETE"])
+@jwt_required(refresh=True)
+def revoke_refresh_token():
+    """Revoke a refresh token, used mainly for logout
+
+    ---
+    delete:
+      tags:
+        - auth
+      summary: Revoke a refresh token
+      description: Revoke a refresh token, used mainly for logout
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: token revoked
+        400:
+          description: bad request
+        401:
+          description: unauthorized
+    """
+    jti = get_jwt()["jti"]
+    user_identity = get_jwt_identity()
+    revoke_token(jti, user_identity)
+    return jsonify({"message": "token revoked"}), 200
+
+
+@jwt.user_lookup_loader
+def user_loader_callback(jwt_headers, jwt_payload):
+    identity = jwt_payload["sub"]
+    return User.query.get(identity)
+
+
+@jwt.token_in_blocklist_loader
+def check_if_token_revoked(jwt_headers, jwt_payload):
+    return is_token_revoked(jwt_payload)
+
+
+@blueprint.before_app_first_request
+def register_views():
+    apispec.spec.path(view=register_user, app=app)
+    apispec.spec.path(view=register_labor, app=app)
+    apispec.spec.path(view=login, app=app)
+    apispec.spec.path(view=refresh, app=app)
+    apispec.spec.path(view=revoke_access_token, app=app)
+    apispec.spec.path(view=revoke_refresh_token, app=app)
